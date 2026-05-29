@@ -380,9 +380,11 @@ def analyze_observation_set(observation_id: str):
             "uploadedBy": observation_set.get("uploadedBy"),
             "fileName": observation_set.get("fileName"),
             "calculatedAt": datetime.utcnow().isoformat(),
-            "algorithm": "Custom Iterative Orbit Fitting",
+            "algorithm": "Custom Iterative Orbit Fitting + Outlier Weighting",
             "orbitalElements": result["best_params"],
             "rmsDeg": result["best_rms_deg"],
+            "weightedRmsDeg": result["weighted_rms_deg"],
+            "outlierCount": result["outlier_count"],
             "observationsCount": len(processed_data),
             "status": "Success",
         }
@@ -431,7 +433,9 @@ def analyze_observation_set(observation_id: str):
             "status": "Success",
             "observationsCount": len(processed_data),
             "rmsDeg": result["best_rms_deg"],
-            "message": "Full analysis completed successfully",
+            "weightedRmsDeg": result["weighted_rms_deg"],
+            "outlierCount": result["outlier_count"],
+            "message": "Full analysis completed successfully with outlier weighting",
         })
 
         return {
@@ -441,6 +445,8 @@ def analyze_observation_set(observation_id: str):
             "predictionId": str(prediction_result.inserted_id),
             "status": "OrbitCalculated",
             "rmsDeg": result["best_rms_deg"],
+            "weightedRmsDeg": result["weighted_rms_deg"],
+            "outlierCount": result["outlier_count"],
             "orbitalElements": result["best_params"],
         }
 

@@ -1,4 +1,3 @@
-# core/forward_model.py
 import math
 from typing import Tuple, Dict, Any
 
