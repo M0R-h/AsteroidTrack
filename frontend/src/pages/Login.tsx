@@ -60,6 +60,9 @@ function Login() {
       setMessage(data.message)
 
       if (data.message === "Login successful") {
+        localStorage.setItem("access_token", data.access_token)
+        localStorage.setItem("refresh_token", data.refresh_token)
+      
         localStorage.setItem(
           "asteroidtrack_user",
           JSON.stringify({
@@ -67,7 +70,7 @@ function Login() {
             email: data.email,
           })
         )
-
+      
         navigate("/dashboard")
       }
     } catch (error) {

@@ -284,6 +284,26 @@ def parse_prediction_start_time(time_str: str) -> datetime:
 
     raise ValueError(f"Unsupported time format: {time_str}")
 
+def datetime_to_jd(dt: datetime) -> float:
+    year = dt.year
+    month = dt.month
+    day = dt.day + (
+        dt.hour / 24
+        + dt.minute / 1440
+        + dt.second / 86400
+        + dt.microsecond / 86400000000
+    )
+
+    if month <= 2:
+        year -= 1
+        month += 12
+
+    A = year // 100
+    B = 2 - A + (A // 4)
+
+    jd = int(365.25 * (year + 4716)) + int(30.6001 * (month + 1)) + day + B - 1524.5
+    return jd
+
 
 def extract_jd_from_time(time_str: str) -> float:
     parts = time_str.split()
@@ -291,7 +311,8 @@ def extract_jd_from_time(time_str: str) -> float:
     if len(parts) >= 3:
         return float(parts[2])
 
-    raise ValueError(f"No JD found in time string: {time_str}")
+    dt = parse_prediction_start_time(time_str)
+    return datetime_to_jd(dt)
 
 
 @router.post("/observations/{observation_id}/analyze")
