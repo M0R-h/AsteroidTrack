@@ -55,7 +55,7 @@ def forward_model(params: Dict[str, float], obs: Dict[str, Any]) -> Tuple[float,
     inc = params["inc"]
     omega = params["omega"]
 
-    M = mean_anomaly_at_time(params, obs["t"])
+    M = mean_anomaly_at_time(params, obs["time"])
 
     x_orb, y_orb, z_orb, _E = position_in_orbital_plane(a=a, e=e, M=M)
 

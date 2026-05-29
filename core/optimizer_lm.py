@@ -5,19 +5,23 @@ from core.cost import predict_radec_at_time
 from core.residuals import residuals
 from core.time_utils import extract_jd
 
+
 def residual_vector(observations: list[dict], params: dict) -> np.ndarray:
-    jd0 = extract_jd(observations[0]["t"])
+    jd0 = extract_jd(observations[0]["time"])
     r = []
 
     for obs in observations:
-        jd = extract_jd(obs["t"])
+        jd = extract_jd(obs["time"])
 
         ra_pred, dec_pred = predict_radec_at_time(jd, jd0, params)
-        ra_obs = math.radians(obs["ra_deg"])
-        dec_obs = math.radians(obs["dec_deg"])
+
+        # Mongo data מגיע במעלות → ממירים לרדיאנים
+        ra_obs = math.radians(obs["ra"])
+        dec_obs = math.radians(obs["dec"])
 
         err_ra, err_dec = residuals(ra_pred, dec_pred, ra_obs, dec_obs)
 
+        # משקל cos(dec)
         err_ra_w = err_ra * math.cos(dec_obs)
 
         r.append(err_ra_w)
@@ -76,18 +80,21 @@ def levenberg_marquardt_fit(
             print(f"iter={it}  solve failed -> lambda={lam}")
             continue
 
-        # בונים מועמד
         p_try = dict(p)
+
         for i, key in enumerate(keys):
             p_try[key] = p_try[key] + float(dp[i])
 
-            # שמירה על טווחים
+            # שמירה על תחומים פיזיקליים
             if key in ("Omega", "omega", "M0"):
                 p_try[key] %= (2 * math.pi)
+
             if key == "inc":
                 p_try[key] = min(math.pi, max(0.0, p_try[key]))
+
             if key == "e":
                 p_try[key] = min(0.9, max(1e-6, p_try[key]))
+
             if key == "a":
                 p_try[key] = max(0.05, p_try[key])
 
@@ -99,6 +106,7 @@ def levenberg_marquardt_fit(
             r = r_try
             best_rms = rms_try
             lam = max(lam / 3, 1e-8)
+
             print(f"iter={it}  RMS(deg)={math.degrees(best_rms):.6f}  ACCEPT  lambda={lam}")
         else:
             lam *= 5
@@ -106,10 +114,9 @@ def levenberg_marquardt_fit(
 
     return p, best_rms
 
-def fit_orbit(observations: list[dict]):
-    from core.time_utils import extract_jd
 
-    t0_jd = extract_jd(observations[0]["t"])
+def fit_orbit(observations: list[dict]):
+    t0_jd = extract_jd(observations[0]["time"])
 
     initial = {
         "a": 1.0,
@@ -122,6 +129,7 @@ def fit_orbit(observations: list[dict]):
     }
 
     keys = ["a", "e", "Omega", "inc", "omega", "M0"]
+
     deltas = {
         "a": 1e-3,
         "e": 1e-4,

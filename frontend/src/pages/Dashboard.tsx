@@ -1,8 +1,10 @@
 import { useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import "../App.css";
+import ForecastCharts from "../components/ForecastCharts";
 
 type ObservationItem = {
+  id?: string;
   fileName: string;
   uploadedBy: string;
   uploadedAt: string;
@@ -10,6 +12,48 @@ type ObservationItem = {
   status: string;
   invalidReason?: string;
   visibility: "private" | "public";
+  orbitalElementId?: string;
+};
+
+type OrbitalElementResult = {
+  id: string;
+  observationSetId: string;
+  uploadedBy: string;
+  fileName: string;
+  calculatedAt: string;
+  algorithm: string;
+  rmsDeg: number;
+  observationsCount: number;
+  status: string;
+  orbitalElements: {
+    a: number;
+    e: number;
+    Omega: number;
+    inc: number;
+    omega: number;
+    M0: number;
+    t0_jd: number;
+  };
+};
+
+type PredictionPoint = {
+  time: string;
+  ra: number;
+  dec: number;
+  distanceFromSunAU?: number;
+  distanceFromEarthAU?: number;
+};
+
+type PredictionResult = {
+  orbitalElementId: string;
+  createdAt: string;
+  count: number;
+  data: PredictionPoint[];
+};
+
+type SelectedResult = {
+  orbital: OrbitalElementResult;
+  predictions: PredictionResult;
 };
 
 function Dashboard() {
@@ -21,6 +65,11 @@ function Dashboard() {
   const [visibility, setVisibility] = useState<"private" | "public">("private");
   const [myObservationHistory, setMyObservationHistory] = useState<ObservationItem[]>([]);
   const [publicObservationHistory, setPublicObservationHistory] = useState<ObservationItem[]>([]);
+  const [activeArchive, setActiveArchive] = useState<"my" | "public">("my");
+  const [selectedResult, setSelectedResult] = useState<SelectedResult | null>(null);
+  const [resultMessage, setResultMessage] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [predictionIndex, setPredictionIndex] = useState(0);
 
   const loggedInUser = useMemo(() => {
     const storedUser = localStorage.getItem("asteroidtrack_user");
@@ -74,6 +123,150 @@ function Dashboard() {
     refreshArchives();
   }, [loggedInUser]);
 
+  useEffect(() => {
+    setPredictionIndex(0);
+  }, [selectedResult]);
+
+  useEffect(() => {
+    if (!selectedResult || selectedResult.predictions.data.length === 0) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setPredictionIndex((currentIndex) => {
+        const total = selectedResult.predictions.data.length;
+        return (currentIndex + 1) % total;
+      });
+    }, 1400);
+
+    return () => window.clearInterval(timer);
+  }, [selectedResult]);
+
+  const openResultsByOrbitalElementId = async (orbitalElementId: string) => {
+    setResultMessage("");
+
+    try {
+      const orbitalResponse = await fetch(
+        `http://127.0.0.1:8000/orbital-elements/${orbitalElementId}`
+      );
+
+      const orbitalData = await orbitalResponse.json();
+
+      if (!orbitalResponse.ok || orbitalData.message) {
+        setResultMessage(orbitalData.message || "Failed to load orbital elements");
+        return;
+      }
+
+      const predictionsResponse = await fetch(
+        `http://127.0.0.1:8000/predictions/by-orbital-element/${orbitalElementId}`
+      );
+
+      const predictionsData = await predictionsResponse.json();
+
+      setSelectedResult({
+        orbital: orbitalData,
+        predictions: predictionsData,
+      });
+    } catch (error) {
+      console.error(error);
+      setResultMessage("Failed to load orbit results");
+    }
+  };
+
+  const handleViewResults = async (item: ObservationItem) => {
+    if (!item.orbitalElementId) {
+      setResultMessage("No orbital result was found for this observation file.");
+      return;
+    }
+
+    await openResultsByOrbitalElementId(item.orbitalElementId);
+  };
+  const handleDeleteObservation = async (item: ObservationItem) => {
+    if (!item.id) {
+      setResultMessage("Observation id is missing.");
+      return;
+    }
+  
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this observation? Related orbit results and predictions will also be deleted."
+    );
+  
+    if (!confirmed) return;
+  
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/observations/${item.id}`,
+        { method: "DELETE" }
+      );
+  
+      const data = await response.json();
+  
+      if (!response.ok || data.message?.includes("not found")) {
+        setResultMessage(data.message || "Delete failed");
+        return;
+      }
+  
+      setMyObservationHistory((prev) =>
+        prev.filter((obs) => obs.id !== item.id)
+      );
+  
+      setPublicObservationHistory((prev) =>
+        prev.filter((obs) => obs.id !== item.id)
+      );
+  
+      if (selectedResult?.orbital.observationSetId === item.id) {
+        setSelectedResult(null);
+      }
+  
+      setResultMessage("");
+    } catch (error) {
+      console.error(error);
+      setResultMessage("Server error while deleting observation");
+    }
+  };
+
+  const handleAnalyze = async (item: ObservationItem) => {
+    if (!item.id) {
+      setResultMessage("Observation id is missing.");
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setResultMessage("");
+    setUploadMessage("Running analysis...");
+
+    try {
+      const analyzeResponse = await fetch(
+        `http://127.0.0.1:8000/observations/${item.id}/analyze`,
+        { method: "POST" }
+      );
+
+      const analyzeData = await analyzeResponse.json();
+
+      if (!analyzeResponse.ok || analyzeData.error) {
+        setResultMessage(analyzeData.message || analyzeData.error || "Analysis failed");
+        setUploadMessage("Analysis failed");
+        await refreshArchives();
+        return;
+      }
+
+      if (analyzeData.orbitalElementId) {
+        setUploadMessage("Analysis completed successfully");
+        await refreshArchives();
+        await openResultsByOrbitalElementId(analyzeData.orbitalElementId);
+      } else {
+        setUploadMessage(analyzeData.message || "Analysis did not return orbital result");
+        await refreshArchives();
+      }
+    } catch (error) {
+      console.error(error);
+      setResultMessage("Server error during analysis");
+      setUploadMessage("Server error during analysis");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setSelectedFile(e.target.files[0]);
@@ -91,14 +284,15 @@ function Dashboard() {
   };
 
   const handleUpload = async () => {
-    if (!selectedFile) {
-      return;
-    }
+    if (!selectedFile) return;
 
     const formData = new FormData();
     formData.append("file", selectedFile);
     formData.append("uploadedBy", loggedInUser);
     formData.append("visibility", visibility);
+
+    setIsAnalyzing(true);
+    setUploadMessage("Uploading file...");
 
     try {
       const response = await fetch("http://127.0.0.1:8000/observations/upload", {
@@ -110,17 +304,34 @@ function Dashboard() {
 
       if (response.ok) {
         if (data.status === "Validated") {
-          setUploadMessage(`Uploaded successfully (${visibility})`);
+          setUploadMessage("Uploaded successfully. Running analysis...");
+
+          const analyzeResponse = await fetch(
+            `http://127.0.0.1:8000/observations/${data.id}/analyze`,
+            { method: "POST" }
+          );
+
+          const analyzeData = await analyzeResponse.json();
+
+          if (analyzeData.orbitalElementId) {
+            setUploadMessage("Analysis completed successfully");
+            await refreshArchives();
+            await openResultsByOrbitalElementId(analyzeData.orbitalElementId);
+          } else {
+            setUploadMessage(analyzeData.message || "Analysis failed");
+            await refreshArchives();
+          }
         } else {
           setUploadMessage(data.invalidReason || "File uploaded but failed validation");
+          await refreshArchives();
         }
-
-        await refreshArchives();
       } else {
         setUploadMessage(data.message || "Upload failed");
       }
-    } catch (error) {
+    } catch {
       setUploadMessage("Server connection error");
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -132,9 +343,17 @@ function Dashboard() {
     }
   };
 
+  const formatNumber = (value: number, digits = 5) => {
+    if (typeof value !== "number") return value;
+    return value.toFixed(digits);
+  };
+
   const renderStatusClass = (status: string) => {
     if (status === "Validated") return "status-validated";
     if (status === "Invalid") return "status-invalid";
+    if (status === "ReadyForOrbitCalculation") return "status-ready";
+    if (status === "ProcessingFailed") return "status-processing-failed";
+    if (status === "OrbitCalculated") return "status-ready";
     return "status-ready";
   };
 
@@ -171,9 +390,35 @@ function Dashboard() {
               </div>
             </div>
 
-            <span className={`status-badge ${renderStatusClass(item.status)}`}>
-              {item.status}
-            </span>
+            <div className="history-actions">
+              {(item.status === "Validated" ||
+                item.status === "ReadyForOrbitCalculation" ||
+                item.status === "ProcessingFailed") && (
+                <button
+                  className="ghost-btn"
+                  onClick={() => handleAnalyze(item)}
+                  disabled={isAnalyzing}
+                >
+                  {isAnalyzing ? "Analyzing..." : "Analyze"}
+                </button>
+              )}
+
+              {item.status === "OrbitCalculated" && (
+                <button className="ghost-btn" onClick={() => handleViewResults(item)}>
+                  View Results
+                </button>
+              )}
+              <button
+              className="ghost-btn delete-observation-btn"
+              onClick={() => handleDeleteObservation(item)}
+            >
+              Delete
+            </button>
+              
+              <span className={`status-badge ${renderStatusClass(item.status)}`}>
+                {item.status}
+              </span>
+            </div>
           </div>
         ))}
       </div>
@@ -240,6 +485,11 @@ function Dashboard() {
             </div>
 
             <div className="sun-core"></div>
+            <div className="asteroid-field">
+              {Array.from({ length: 20 }).map((_, i) => (
+                <div key={i} className="asteroid-mini" />
+                ))}
+                </div>
 
             <div className="orbit orbit-1">
               <div className="planet-track spin-slow">
@@ -264,6 +514,7 @@ function Dashboard() {
                 <div className="asteroid-marker"></div>
               </div>
             </div>
+              
 
             <div className="sector-card">
               <span className="sector-label">CURRENT SECTOR</span>
@@ -275,8 +526,15 @@ function Dashboard() {
           <div className="stats-row">
             <div className="mini-stat">
               <span className="mini-stat-label">Tracked Objects</span>
-              <strong>12</strong>
+              <strong>
+                {
+                [...myObservationHistory, ...publicObservationHistory].filter(
+                  (item) => item.status === "OrbitCalculated"
+                ).length
+                }
+                </strong>
             </div>
+            
             <div className="mini-stat">
               <span className="mini-stat-label">My Uploads</span>
               <strong>{myObservationHistory.length}</strong>
@@ -347,9 +605,9 @@ function Dashboard() {
             <button
               className="primary-action-btn"
               onClick={handleUpload}
-              disabled={!selectedFile}
+              disabled={!selectedFile || isAnalyzing}
             >
-              Upload Observations
+              {isAnalyzing ? "Analyzing..." : "Upload Observations"}
             </button>
           </div>
 
@@ -369,11 +627,11 @@ function Dashboard() {
             </div>
             <div className="snapshot-row">
               <span>Upload Queue</span>
-              <strong>Idle</strong>
+              <strong>{isAnalyzing ? "Processing" : "Idle"}</strong>
             </div>
             <div className="snapshot-row">
               <span>Prediction Engine</span>
-              <strong>Standby</strong>
+              <strong>{isAnalyzing ? "Running" : selectedResult ? "Active" : "Standby"}</strong>
             </div>
           </div>
         </aside>
@@ -381,33 +639,223 @@ function Dashboard() {
         <section className="history-panel glass-card">
           <div className="history-top">
             <div className="section-header compact">
-              <span className="section-tag">My Archive</span>
-              <h3>My Observation History</h3>
+              <span className="section-tag">
+                {activeArchive === "my" ? "My Archive" : "Public Archive"}
+              </span>
+              <h3>
+                {activeArchive === "my"
+                  ? "My Observation History"
+                  : "Shared Observation History"}
+              </h3>
             </div>
           </div>
 
-          {renderArchiveList(
-            myObservationHistory,
-            "No private or personal observations yet",
-            "Upload your first observation file to see it here."
-          )}
-        </section>
+          <div className="archive-toggle">
+            <button
+              className={`archive-toggle-btn ${
+                activeArchive === "my" ? "archive-toggle-btn-active" : ""
+              }`}
+              onClick={() => setActiveArchive("my")}
+            >
+              My Archive
+            </button>
 
-        <section className="history-panel glass-card">
-          <div className="history-top">
-            <div className="section-header compact">
-              <span className="section-tag">Public Archive</span>
-              <h3>Shared Observation History</h3>
-            </div>
+            <button
+              className={`archive-toggle-btn ${
+                activeArchive === "public" ? "archive-toggle-btn-active" : ""
+              }`}
+              onClick={() => setActiveArchive("public")}
+            >
+              Public Archive
+            </button>
           </div>
 
-          {renderArchiveList(
-            publicObservationHistory,
-            "No public observations yet",
-            "Public observation files shared by users will appear here."
+          {activeArchive === "my"
+            ? renderArchiveList(
+                myObservationHistory,
+                "No private or personal observations yet",
+                "Upload your first observation file to see it here."
+              )
+            : renderArchiveList(
+                publicObservationHistory,
+                "No public observations yet",
+                "Public observation files shared by users will appear here."
+              )}
+
+          {resultMessage && (
+            <div className="history-error-text" style={{ marginTop: "16px" }}>
+              {resultMessage}
+            </div>
           )}
         </section>
       </main>
+
+      {selectedResult && (
+        <div className="orbit-modal-overlay">
+          <div className="orbit-modal">
+            <button
+              className="orbit-modal-close"
+              onClick={() => setSelectedResult(null)}
+            >
+              ×
+            </button>
+
+            <div className="orbit-modal-header">
+              <span className="section-tag">Orbit Results</span>
+              <h2>Calculated Orbital Elements</h2>
+              <p>
+                Results generated from the selected observation file using a custom
+                iterative orbit fitting algorithm.
+              </p>
+            </div>
+
+            <div className="orbit-modal-content">
+              <div className="orbit-visual-column">
+              <div className="orbit-modal-visual asteroid-orbit-visual">
+  <div className="sun-core"></div>
+
+  {(() => {
+    const total = Math.max(selectedResult.predictions.data.length, 1);
+    const safeIndex = Math.min(predictionIndex, total - 1);
+
+    const asteroidAngle = (safeIndex / total) * 2 * Math.PI + 0.45;
+    const orbitWidth = Math.min(
+      430,
+      260 + selectedResult.orbital.orbitalElements.a * 70
+    );
+
+    const orbitHeight = Math.max(
+      130,
+      orbitWidth * (1 - Math.min(selectedResult.orbital.orbitalElements.e, 0.75))
+    );
+
+    const asteroidA = orbitWidth / 2;
+    const asteroidB = orbitHeight / 2;
+
+    const asteroidX = Math.cos(asteroidAngle) * asteroidA;
+    const asteroidY = Math.sin(asteroidAngle) * asteroidB;
+
+    const earthAngle = (safeIndex / total) * 2 * Math.PI;
+    const earthRadius = 122.5; // half of 245px from CSS
+
+    const earthX = Math.cos(earthAngle) * earthRadius;
+    const earthY = Math.sin(earthAngle) * earthRadius;
+
+    return (
+      <>
+        <div
+          className="computed-orbit-path"
+          style={{
+            width: `${orbitWidth}px`,
+            height: `${orbitHeight}px`,
+          }}
+        />
+
+        <div className="earth-orbit-path" />
+
+        <div
+          className="animated-earth"
+          style={{
+            transform: `translate(calc(-50% + ${earthX}px), calc(-50% + ${earthY}px))`,
+          }}
+        >
+          <span className="earth-marker" title="Earth"></span>
+        </div>
+
+        <div
+          className="animated-asteroid"
+          style={{
+            transform: `translate(calc(-50% + ${asteroidX}px), calc(-50% + ${asteroidY}px))`,
+          }}
+        >
+          <span className="asteroid-core"></span>
+        </div>
+      </>
+    );
+  })()}
+</div>
+
+                <div className="orbit-time-control orbit-time-control-standalone">
+                  <div className="orbit-time-header">
+                    <span>Time Scale</span>
+                    <strong>Day {predictionIndex + 1}</strong>
+                  </div>
+
+                  <input
+                    type="range"
+                    min="0"
+                    max={Math.max(selectedResult.predictions.data.length - 1, 0)}
+                    value={predictionIndex}
+                    onChange={(e) => setPredictionIndex(Number(e.target.value))}
+                  />
+
+                  <small>
+                    {selectedResult.predictions.data[predictionIndex]
+                      ? formatDate(selectedResult.predictions.data[predictionIndex].time)
+                      : "No prediction selected"}
+                  </small>
+                </div>
+
+                <div className="orbital-elements-grid orbit-elements-under-visual">
+                  <div>
+                    <span>a</span>
+                    <strong>{formatNumber(selectedResult.orbital.orbitalElements.a)}</strong>
+                  </div>
+                  <div>
+                    <span>e</span>
+                    <strong>{formatNumber(selectedResult.orbital.orbitalElements.e)}</strong>
+                  </div>
+                  <div>
+                    <span>Ω</span>
+                    <strong>{formatNumber(selectedResult.orbital.orbitalElements.Omega)}</strong>
+                  </div>
+                  <div>
+                    <span>i</span>
+                    <strong>{formatNumber(selectedResult.orbital.orbitalElements.inc)}</strong>
+                  </div>
+                  <div>
+                    <span>ω</span>
+                    <strong>{formatNumber(selectedResult.orbital.orbitalElements.omega)}</strong>
+                  </div>
+                  <div>
+                    <span>M₀</span>
+                    <strong>{formatNumber(selectedResult.orbital.orbitalElements.M0)}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="prediction-chart-card">
+                <h4>RA / DEC Prediction Graph</h4>
+
+                <ForecastCharts
+                predictions={selectedResult.predictions.data}
+                selectedIndex={predictionIndex}
+                />
+
+                <div className="results-grid results-under-chart">
+                  <div className="result-card">
+                    <span>RMS Error</span>
+                    <strong>{formatNumber(selectedResult.orbital.rmsDeg, 4)}°</strong>
+                  </div>
+
+                  <div className="result-card">
+                    <span>Observations</span>
+                    <strong>{selectedResult.orbital.observationsCount}</strong>
+                  </div>
+
+                  <div className="result-card">
+                    <span>Algorithm</span>
+                    <strong>Custom Iterative Orbit Fitting</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="orbit-modal-details">
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
